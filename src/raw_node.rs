@@ -33,6 +33,10 @@ use crate::{Raft, SoftState, Status, Storage};
 use slog::Logger;
 
 /// Represents a Peer node in the cluster.
+/// 
+/// 集群中的其它节点
+/// id: 为其它节点id
+/// context: 为其它节点的一些其它信息，比如ip端口等等
 #[derive(Debug, Default)]
 pub struct Peer {
     /// The ID of the peer.
@@ -43,6 +47,9 @@ pub struct Peer {
 }
 
 /// The status of the snapshot.
+/// 快照状态
+/// Finish: 快照已经成功创建
+/// Failure: 快照失败或快照未准备好
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum SnapshotStatus {
     /// Represents that the snapshot is finished being created.
@@ -52,6 +59,15 @@ pub enum SnapshotStatus {
 }
 
 /// Checks if certain message type should be used internally.
+/// 
+/// raft处理请求和消息都必须在同一个线程保证有序性
+/// 所以内部通信也是靠消息，理解为CQRS或者EventSourching
+/// 所以这个方法是判断收到的消息是否为本地消息
+/// 
+/// MsgHup: 
+/// MsgBeat:
+/// MsgSnapStatus:
+/// MsgCheckQuorum:
 pub fn is_local_msg(t: MessageType) -> bool {
     matches!(
         t,
@@ -63,6 +79,11 @@ pub fn is_local_msg(t: MessageType) -> bool {
     )
 }
 
+/// 判断所给消息类型是否为消息响应
+/// MsgAppendResponse: 消息附加响应
+/// MsgRequestVetoResponse: 发起投票响应
+/// MsgUnreachable: 消息无法到达响应
+/// MsgRequestPreVoteResponse: 预发起投票响应
 fn is_response_msg(t: MessageType) -> bool {
     matches!(
         t,
@@ -75,6 +96,7 @@ fn is_response_msg(t: MessageType) -> bool {
 }
 
 /// For a given snapshot, determine if it's empty or not.
+/// 判断快照是否为空
 #[deprecated(since = "0.6.0", note = "Please use `Snapshot::is_empty` instead")]
 pub fn is_empty_snap(s: &Snapshot) -> bool {
     s.is_empty()
@@ -82,6 +104,14 @@ pub fn is_empty_snap(s: &Snapshot) -> bool {
 
 /// Ready encapsulates the entries and messages that are ready to read,
 /// be saved to stable storage, committed or sent to other peers.
+/// 已经准备好的数据, 这些苏剧可以持久化到磁盘或者提交或者发送给其它节点
+/// 这些消息包括：
+/// SoftState: 未知
+/// HardState: 未知
+/// read_states: 读取状态
+/// entries: 消息条目
+/// snapshot: 快照
+/// light: 消息即已经提交的消息条目和消息数据
 #[derive(Default, Debug, PartialEq)]
 pub struct Ready {
     number: u64,
@@ -203,13 +233,14 @@ struct ReadyRecord {
 
 /// LightReady encapsulates the commit index, committed entries and
 /// messages that are ready to be applied or be sent to other peers.
+/// 封装了已经提交的的数据和提交数据索引和消息，这些数据将被应用到状态机或者传输给其它节点
 #[derive(Default, Debug, PartialEq)]
 pub struct LightReady {
     commit_index: Option<u64>,
     committed_entries: Vec<Entry>,
     messages: Vec<Vec<Message>>,
 }
-
+/// 同上
 impl LightReady {
     /// The current commit index.
     /// It will be None state if there is no update.
@@ -270,10 +301,13 @@ impl<T: Storage> RawNode<T> {
     /// Create a new RawNode given some [`Config`](../struct.Config.html).
     pub fn new(config: &Config, store: T, logger: &Logger) -> Result<Self> {
         assert_ne!(config.id, 0, "config.id must not be zero");
+        // 初始化 raft 节点
         let r = Raft::new(config, store, logger)?;
         let mut rn = RawNode {
             raft: r,
+            // prev hard state
             prev_hs: Default::default(),
+            // prev soft state
             prev_ss: Default::default(),
             max_number: 0,
             records: VecDeque::new(),

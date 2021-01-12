@@ -308,12 +308,17 @@ impl ProgressTracker {
 
     /// TallyVotes returns the number of granted and rejected Votes, and whether the
     /// election outcome is known.
+    /// 统计及计算选举结果
     pub fn tally_votes(&self) -> (usize, usize, VoteResult) {
         // Make sure to populate granted/rejected correctly even if the Votes slice
         // contains members no longer part of the configuration. This doesn't really
         // matter in the way the numbers are used (they're informational), but might
         // as well get it right.
         let (mut granted, mut rejected) = (0, 0);
+        // 获取所有节点的投票情况，数据来自于一个hashmap<node_id,granted>
+        // key为节点id，value为是否投票给了当前节点
+
+        // 统计票数
         for (id, vote) in &self.votes {
             if !self.conf.voters.contains(*id) {
                 continue;
@@ -324,6 +329,7 @@ impl ProgressTracker {
                 rejected += 1;
             }
         }
+        // 计算选举结果，根据票数
         let result = self.vote_result(&self.votes);
         (granted, rejected, result)
     }

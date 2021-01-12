@@ -82,7 +82,7 @@ fn main() {
         match receiver.recv_timeout(timeout) {
             Ok(Msg::Propose { id, cb }) => {
                 cbs.insert(id, cb);
-                r.propose(vec![], vec![id]).unwrap();
+                r.propose(vec![], vec![id]);
             }
             Ok(Msg::Raft(m)) => r.step(m).unwrap(),
             Err(RecvTimeoutError::Timeout) => (),
@@ -94,6 +94,8 @@ fn main() {
         if d >= timeout {
             timeout = Duration::from_millis(100);
             // We drive Raft every 100ms.
+
+            // 触发选举 或者 发送心跳(节点为leadler)
             r.tick();
         } else {
             timeout -= d;
@@ -115,6 +117,7 @@ fn on_ready(raft_group: &mut RawNode<MemStorage>, cbs: &mut HashMap<u8, ProposeC
         for vec_msg in msgs {
             for _msg in vec_msg {
                 // Send messages to other peers.
+                println!("{:?}",_msg)
             }
         }
     };
@@ -176,27 +179,29 @@ fn on_ready(raft_group: &mut RawNode<MemStorage>, cbs: &mut HashMap<u8, ProposeC
 
 fn send_propose(logger: Logger, sender: mpsc::Sender<Msg>) {
     thread::spawn(move || {
-        // Wait some time and send the request to the Raft.
-        thread::sleep(Duration::from_secs(10));
+        loop {
+            // Wait some time and send the request to the Raft.
+            thread::sleep(Duration::from_secs(10));
 
-        let (s1, r1) = mpsc::channel::<u8>();
 
-        info!(logger, "propose a request");
+            let (s1, r1) = mpsc::channel::<u8>();
+            info!(logger, "propose a request");
 
-        // Send a command to the Raft, wait for the Raft to apply it
-        // and get the result.
-        sender
-            .send(Msg::Propose {
-                id: 1,
-                cb: Box::new(move || {
-                    s1.send(0).unwrap();
-                }),
-            })
-            .unwrap();
+            // Send a command to the Raft, wait for the Raft to apply it
+            // and get the result.
+            sender
+                .send(Msg::Propose {
+                    id: 0,
+                    cb: Box::new(move || {
+                        s1.send(0).unwrap();
+                    }),
+                })
+                .unwrap();
 
-        let n = r1.recv().unwrap();
-        assert_eq!(n, 0);
+            let n = r1.recv().unwrap();
+            assert_eq!(n, 0);
 
-        info!(logger, "receive the propose callback");
+            info!(logger, "receive the propose callback");
+            }
     });
 }

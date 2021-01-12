@@ -3,12 +3,27 @@
 use crate::{Inflights, ProgressState, INVALID_INDEX};
 use std::cmp;
 
+/// progress 代表跟随着当前leader节点的 其它replicate节点的复制进度
+/// 该组件也是一个状态机，有三种状态，定义在ProgressState
+/// + Probe
+///   探测状态，说明leader节点不知道目标节点的复制进度，所以进行探测
+/// + Replicate
+///   复制状态, 说明leader已经知道目标节点的复制进度，将根据next_idx复制给目标进度
+/// + Snapshot
+///   快照进度，说明正在发送快照给目标复制节点，只有快照发送完成后，才能复制条目
+/// 
+/// paused 状态，当为Probe探测状态的时候，raft将停止发送复制消息，因为raft并不知道
+/// 目标复制节点的进度，所以只能等探测
+/// 
+
 /// The progress of catching up from a restart.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
     /// How much state is matched.
+    /// 复制节点的进度
     pub matched: u64,
     /// The next index to apply
+    /// 复制节点下一个进度
     pub next_idx: u64,
     /// When in ProgressStateProbe, leader sends at most one replication message
     /// per heartbeat interval. It also probes actual progress of the follower.
@@ -19,19 +34,24 @@ pub struct Progress {
     ///
     /// When in ProgressStateSnapshot, leader should have sent out snapshot
     /// before and stop sending any replication message.
+    /// 进度状态，上面已经说明
     pub state: ProgressState,
     /// Paused is used in ProgressStateProbe.
     /// When Paused is true, raft should pause sending replication message to this peer.
+    /// 用于探测状态，当这个值为true的时候，leader节点不知道目标复制节点的进度，所以暂停将复制消息
+    /// 发送给目标复制节点
     pub paused: bool,
     /// This field is used in ProgressStateSnapshot.
     /// If there is a pending snapshot, the pendingSnapshot will be set to the
     /// index of the snapshot. If pendingSnapshot is set, the replication process of
     /// this Progress will be paused. raft will not resend snapshot until the pending one
     /// is reported to be failed.
+    /// 用于快照状态，代表正在复制的快照索引，如果正在复制快照，那么进度也会被暂停
     pub pending_snapshot: u64,
     /// This field is used in request snapshot.
     /// If there is a pending request snapshot, this will be set to the request
     /// index of the snapshot.
+    /// 请求复制的快照索引
     pub pending_request_snapshot: u64,
 
     /// This is true if the progress is recently active. Receiving any messages
@@ -46,6 +66,7 @@ pub struct Progress {
     /// into inflights in order.
     /// When a leader receives a reply, the previous inflights should
     /// be freed by calling inflights.freeTo.
+    /// 环形队列存放需要发送的消息，是有大小限制的
     pub ins: Inflights,
 
     /// Only logs replicated to different group will be committed if any group is configured.

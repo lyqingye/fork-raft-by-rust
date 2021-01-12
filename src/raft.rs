@@ -152,31 +152,41 @@ impl UncommittedState {
 #[derive(Getters)]
 pub struct RaftCore<T: Storage> {
     /// The current election term.
+    /// 当前任期
     pub term: u64,
 
     /// Which peer this raft is voting for.
+    /// 当前节点投票的目标节点id
+    /// 当前节点 投票 给 目标节点id
     pub vote: u64,
 
     /// The ID of this node.
+    /// 当前节点 
     pub id: u64,
 
     /// The current read states.
+    /// 当前只读队列的读取状态列表 ReadOnly 队列
     pub read_states: Vec<ReadState>,
 
     /// The persistent log.
+    /// raft 日志组件 用于持久化日志
     pub raft_log: RaftLog<T>,
 
     /// The maximum number of messages that can be inflight.
+    /// 最大消息正在传输个数
     pub max_inflight: usize,
 
     /// The maximum length (in bytes) of all the entries.
+    /// 所有消息最大大小
     pub max_msg_size: u64,
 
     /// The peer is requesting snapshot, it is the index that the follower
     /// needs it to be included in a snapshot.
+    /// 
     pub pending_request_snapshot: u64,
 
     /// The current role of this node.
+    /// 节点状态
     pub state: StateRole,
 
     /// Indicates whether state machine can be promoted to leader,
@@ -184,11 +194,13 @@ pub struct RaftCore<T: Storage> {
     promotable: bool,
 
     /// The leader id
+    /// 当前集群中的领导节点id
     pub leader_id: u64,
 
     /// ID of the leader transfer target when its value is not None.
     ///
     /// If this is Some(id), we follow the procedure defined in raft thesis 3.10.
+    /// 
     pub lead_transferee: Option<u64>,
 
     /// Only one conf change may be pending (in the log, but not yet
@@ -205,18 +217,22 @@ pub struct RaftCore<T: Storage> {
     pub pending_conf_index: u64,
 
     /// The queue of read-only requests.
+    /// 只读的一个队列，里面存放的是需要发送给其它节点的请求
     pub read_only: ReadOnly,
 
     /// Ticks since it reached last electionTimeout when it is leader or candidate.
     /// Number of ticks since it reached last electionTimeout or received a
     /// valid message from current leader when it is a follower.
+    /// 选举超时时间
     pub election_elapsed: usize,
 
     /// Number of ticks since it reached last heartbeatTimeout.
     /// only leader keeps heartbeatElapsed.
+    /// 心跳超时时间
     heartbeat_elapsed: usize,
 
     /// Whether to check the quorum
+    /// Quorum机制
     pub check_quorum: bool,
 
     /// Enable the prevote algorithm.
@@ -224,28 +240,38 @@ pub struct RaftCore<T: Storage> {
     /// This enables a pre-election vote round on Candidates prior to disrupting the cluster.
     ///
     /// Enable this if greater cluster stability is preferred over faster elections.
+    /// 预投票算法
     pub pre_vote: bool,
-
+    
     skip_bcast_commit: bool,
+    // 是否开启批量附加实体
     batch_append: bool,
-
+    
+    // 心跳超时间隔
     heartbeat_timeout: usize,
+    // 选举超时间隔
     election_timeout: usize,
 
     // randomized_election_timeout is a random number between
     // [min_election_timeout, max_election_timeout - 1]. It gets reset
     // when raft changes its state to follower or candidate.
+    // 随机的选举超时间隔
     randomized_election_timeout: usize,
+    // 最小的选举超时间隔
     min_election_timeout: usize,
+    // 最大的选举超时间隔
     max_election_timeout: usize,
 
     /// The logger for the raft structure.
+    /// 日志组件
     pub(crate) logger: slog::Logger,
 
     /// The election priority of this node.
+    /// 选举优先级
     pub priority: u64,
 
     /// Track uncommitted log entry on this node
+    /// 当前节点未提交的日志条目
     uncommitted_state: UncommittedState,
 }
 
@@ -301,6 +327,7 @@ pub fn vote_resp_msg_type(t: MessageType) -> MessageType {
 
 impl<T: Storage> Raft<T> {
     /// Creates a new raft for use on the node.
+    /// [RawNode::new]->[Raft::new]
     #[allow(clippy::new_ret_no_self)]
     pub fn new(c: &Config, store: T, logger: &Logger) -> Result<Self> {
         c.validate()?;
@@ -353,6 +380,8 @@ impl<T: Storage> Raft<T> {
                 },
             },
         };
+
+        // 更新当前节点的一些信息，将raft日志里面的元数据加载到当前节点
         confchange::restore(&mut r.prs, r.r.raft_log.last_index(), conf_state)?;
         let new_cs = r.post_conf_change();
         if !raft_proto::conf_state_eq(&new_cs, conf_state) {
@@ -363,13 +392,14 @@ impl<T: Storage> Raft<T> {
                 new_cs
             );
         }
-
+        // 从日志里面恢复raft节点的重要元数据，任期，最后提交的日志索引，投票目标节点id
         if raft_state.hard_state != HardState::default() {
             r.load_state(&raft_state.hard_state);
         }
         if c.applied > 0 {
             r.commit_apply(c.applied);
         }
+        // 启动时默认为 follower节点
         r.become_follower(r.term, INVALID_ID);
 
         info!(
@@ -581,13 +611,17 @@ impl<T: Storage> Raft<T> {
 impl<T: Storage> RaftCore<T> {
     // send persists state to stable storage and then sends to its mailbox.
     fn send(&mut self, mut m: Message, msgs: &mut Vec<Message>) {
-        debug!(
-            self.logger,
-            "Sending from {from} to {to}",
-            from = self.id,
-            to = m.to;
-            "msg" => ?m,
-        );
+        if m.get_msg_type() != MessageType::MsgHeartbeat
+            && m.get_msg_type() != MessageType::MsgHeartbeatResponse
+            && m.get_msg_type() != MessageType::MsgAppendResponse {
+            // debug!(
+            //     self.logger,
+            //     "Sending from {from} to {to}",
+            //     from = self.id,
+            //     to = m.to;
+            //     "msg" => ?m,
+            // );
+        }
         if m.from == INVALID_ID {
             m.from = self.id;
         }
@@ -920,18 +954,25 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Resets the current node to a given term.
+    /// 初次启动: [RawNode::new]->[Raft::new]->[Raft::become_follower] (term: 0,leader_id: INVALID_ID)
+    /// ->[Raft::reset] (term: 0)
     pub fn reset(&mut self, term: u64) {
         if self.term != term {
             self.term = term;
+            // 当任期有变动之时会清空投票
             self.vote = INVALID_ID;
         }
+        // 清空leader
         self.leader_id = INVALID_ID;
+        // 重新随机生成选举的超时时长，注：这个不会触发选举，只是重新生成一下超时时长
         self.reset_randomized_election_timeout();
         self.election_elapsed = 0;
         self.heartbeat_elapsed = 0;
-
+        
+        // 停止领导节点调动
         self.abort_leader_transfer();
-
+        
+        // 该组件暂未了解
         self.prs.reset_votes();
 
         self.pending_conf_index = 0;
@@ -942,6 +983,8 @@ impl<T: Storage> Raft<T> {
         let committed = self.raft_log.committed;
         let persisted = self.raft_log.persisted;
         let self_id = self.id;
+
+        // 重置所有 ProcessTracker 此组件暂未了解
         for (&id, mut pr) in self.mut_prs().iter_mut() {
             pr.reset(last_index + 1);
             if id == self_id {
@@ -997,6 +1040,7 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Returns true to indicate that there will probably be some readiness need to be handled.
+    /// 触发选举或者广播心跳
     pub fn tick(&mut self) -> bool {
         match self.state {
             StateRole::Follower | StateRole::PreCandidate | StateRole::Candidate => {
@@ -1055,8 +1099,10 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Converts this node to a follower.
+    /// 初次启动: [RawNode::new]->[Raft::new]->[Raft::become_follower] (term: 0,leader_id: INVALID_ID)
     pub fn become_follower(&mut self, term: u64, leader_id: u64) {
         let pending_request_snapshot = self.pending_request_snapshot;
+        // reset会重置状态，我们并不希望被重置 pending_request_snapshot, 所以上面的代码copy了一份
         self.reset(term);
         self.leader_id = leader_id;
         self.state = StateRole::Follower;
@@ -1198,6 +1244,8 @@ impl<T: Storage> Raft<T> {
             self.become_candidate();
             (MessageType::MsgRequestVote, self.term)
         };
+
+        // 拉取选票，如果赢得了选票那么直接就成为leader, 可以看self.poll
         let self_id = self.id;
         if VoteResult::Won == self.poll(self_id, vote_msg, true) {
             // We won the election after voting for ourselves (which must mean that
@@ -1252,18 +1300,32 @@ impl<T: Storage> Raft<T> {
 
     /// Steps the raft along via a message. This should be called everytime your raft receives a
     /// message from a peer.
+    /// 
+    /// 状态机入口 
     pub fn step(&mut self, m: Message) -> Result<()> {
         // Handle the message term, which may result in our stepping down to a follower.
         if m.term == 0 {
             // local message
         } else if m.term > self.term {
+            // 接收到的任期 大于 当前节点任期，当前集群没有leader节点, 当前正在投票选举中
+            // 因为一次新的选举 任期会增加1
+
+            // [1] MsgRequestPreVote 为 Provote算法，该算法在选举过程中不会直接发送 MsgRequestVote
+            // 他会先发起预投票请求(MsgRequestPreVote)，如果多数节点都赞成
+            // 那么才会开启下一任期，发起真正的投票请求(MsgRequestVote)
             if m.get_msg_type() == MessageType::MsgRequestVote
                 || m.get_msg_type() == MessageType::MsgRequestPreVote
             {
+                // 未知
                 let force = m.context == CAMPAIGN_TRANSFER;
+
                 let in_lease = self.check_quorum
+                    // 不存在leader
                     && self.leader_id != INVALID_ID
+                    // 选举超时
                     && self.election_elapsed < self.election_timeout;
+
+                // 如果选举超时，那么不会处理任何投票请求
                 if !force && in_lease {
                     // if a server receives RequestVote request within the minimum election
                     // timeout of hearing from a current leader, it does not update its term
@@ -1290,10 +1352,13 @@ impl<T: Storage> Raft<T> {
                     return Ok(());
                 }
             }
-
+            
+            // [2] 收到了预投票消息 和 投票给当前节点的响应
+            // 其它节点预投票给了当前节点
             if m.get_msg_type() == MessageType::MsgRequestPreVote
                 || (m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.reject)
             {
+
                 // For a pre-vote request:
                 // Never change our term in response to a pre-vote request.
                 //
@@ -1312,16 +1377,32 @@ impl<T: Storage> Raft<T> {
                     "message_term" => m.term,
                     "msg type" => ?m.get_msg_type(),
                 );
+
+                // 如果为以下几个消息类型, 那么已经选举成功了，并且leader节点不是当前节点
+                // leader 节点为 m.from 也就是消息发送方节点
+
+                // append entries 条目附加消息
+                // heartbeat 心跳消息
+                // snapshot 条目快照消息
                 if m.get_msg_type() == MessageType::MsgAppend
                     || m.get_msg_type() == MessageType::MsgHeartbeat
                     || m.get_msg_type() == MessageType::MsgSnapshot
                 {
+                    // 已经选举成功了，更新当前节点为 follower节点，并且设置 leader 节点为 消息发送方
                     self.become_follower(m.term, m.from);
                 } else {
+                    // 条件：m.get_msg_type() != MessageType::MsgRequestPreVote && 
+                    // !(m.get_msg_type() == MessageType::MsgRequestPreVoteResponse && !m.reject)
+                    // 即收到的消息既不是 PreVote 也不是 PrevoteResponse 
+
+                    // 当前节点已经无法发起投票或预投票请求，只能成为 follower 节点
                     self.become_follower(m.term, INVALID_ID);
                 }
             }
         } else if m.term < self.term {
+            // [3] 消息任期 > 当前节点任期
+            // 如果消息类型为预投票，那么我们会拒绝该预投票
+            // 如果我们收到的消息为别的节点请求投票的消息 并且开启了预投票 ，那么我们将会投一票给它
             if (self.check_quorum || self.pre_vote)
                 && (m.get_msg_type() == MessageType::MsgHeartbeat
                     || m.get_msg_type() == MessageType::MsgAppend)
@@ -1389,8 +1470,14 @@ impl<T: Storage> Raft<T> {
         fail_point!("before_step");
 
         match m.get_msg_type() {
+            // [Raft::tick]->[Raft::tick_election]->[Raft::step] 触发选举后会发送MsgHup消息来处理选举投票结果
+            // 参数为false则说明 进行领导人选举
             MessageType::MsgHup => self.hup(false),
+
             MessageType::MsgRequestVote | MessageType::MsgRequestPreVote => {
+                // 1. 如果目标节点我们之前已经投过票了，那么我们会再次投票给他
+                // 2. 如果我们之前没有投过票，并且在这个任期内集群中没有leader，那么我们可以投票给他
+                // 3. 预投票中的任期大于我们当前任期，那么我们将投票给他
                 // We can vote if this is a repeat of a vote we've already cast...
                 let can_vote = (self.vote == m.from) ||
                     // ...we haven't voted and we don't think there's a leader yet in this term...
@@ -1398,6 +1485,9 @@ impl<T: Storage> Raft<T> {
                     // ...or this is a PreVote for a future term...
                     (m.get_msg_type() == MessageType::MsgRequestPreVote && m.term > self.term);
                 // ...and we believe the candidate is up to date.
+
+                // 我们相信，目标节点的任期是大于当前节点的任期，并且消息的索引大于当前节点的最后索引，也就是条目是最新的
+                // 那么我们就会投票给他
                 if can_vote
                     && self.raft_log.is_up_to_date(m.index, m.log_term)
                     && (m.index > self.raft_log.last_index() || self.priority <= m.priority)
@@ -1411,22 +1501,27 @@ impl<T: Storage> Raft<T> {
                     // the message (it ignores all out of date messages).
                     // The term in the original message and current local term are the
                     // same in the case of regular votes, but different for pre-votes.
+                    // 打印下日志
                     self.log_vote_approve(&m);
                     let mut to_send =
                         new_message(m.from, vote_resp_msg_type(m.get_msg_type()), None);
                     to_send.reject = false;
+                    // 如果投票给了目标节点，那么更新任期为目标节点的任期
                     to_send.term = m.term;
                     self.r.send(to_send, &mut self.msgs);
                     if m.get_msg_type() == MessageType::MsgRequestVote {
                         // Only record real votes.
+                        // 更新选举时间和目标投票的节点id
                         self.election_elapsed = 0;
                         self.vote = m.from;
                     }
                 } else {
+                    // 拒绝投票
                     self.log_vote_reject(&m);
                     let mut to_send =
                         new_message(m.from, vote_resp_msg_type(m.get_msg_type()), None);
                     to_send.reject = true;
+                    // 如果是拒绝投票，那么任期还是当前节点的任期
                     to_send.term = self.term;
                     let (commit, commit_term) = self.raft_log.commit_info();
                     to_send.commit = commit;
@@ -1444,7 +1539,9 @@ impl<T: Storage> Raft<T> {
         Ok(())
     }
 
+    /// 处理选举
     fn hup(&mut self, transfer_leader: bool) {
+        // 如果为已经为leader 则无需再次选举
         if self.state == StateRole::Leader {
             debug!(
                 self.logger,
@@ -1457,11 +1554,11 @@ impl<T: Storage> Raft<T> {
         // `maybe_first_index`. Note that snapshot updates configuration
         // already, so as long as pending entries don't contain conf change
         // it's safe to start campaign.
+        // 如果存在未应用到状态机的日志里面包含配置切换的日志，那么直接不做处理直接返回
         let first_index = match self.raft_log.unstable.maybe_first_index() {
             Some(idx) => idx,
             None => self.raft_log.applied + 1,
         };
-
         let ents = self
             .raft_log
             .slice(first_index, self.raft_log.committed + 1, None)
@@ -1493,8 +1590,10 @@ impl<T: Storage> Raft<T> {
         if transfer_leader {
             self.campaign(CAMPAIGN_TRANSFER);
         } else if self.pre_vote {
+            // 开启了预投票就走这个进行选举
             self.campaign(CAMPAIGN_PRE_ELECTION);
         } else {
+            // 未开启预投票则进行选举
             self.campaign(CAMPAIGN_ELECTION);
         }
     }
@@ -1531,6 +1630,7 @@ impl<T: Storage> Raft<T> {
         );
     }
 
+    // 处理条目附加响应
     fn handle_append_response(&mut self, m: &Message) {
         let pr = match self.prs.get_mut(m.from) {
             Some(pr) => pr,
@@ -1548,6 +1648,8 @@ impl<T: Storage> Raft<T> {
         // update followers committed index via append response
         pr.update_committed(m.commit);
 
+        // 如果子节点拒绝了条目附加，那么我们可以减少子节点的相应索引
+        // 
         if m.reject {
             debug!(
                 self.r.logger,
@@ -1625,6 +1727,7 @@ impl<T: Storage> Raft<T> {
         }
     }
 
+    // 处理心跳响应
     fn handle_heartbeat_response(&mut self, m: &Message) {
         // Update the node. Drop the value explicitly since we'll check the qourum after.
         let pr = match self.prs.get_mut(m.from) {
@@ -1639,14 +1742,19 @@ impl<T: Storage> Raft<T> {
             }
         };
         // update followers committed index via heartbeat response
+        // 更新子节点的提交索引
         pr.update_committed(m.commit);
+        // 标记子节点最近活跃
         pr.recent_active = true;
+        // 子节点process继续处理消息
         pr.resume();
 
         // free one slot for the full inflights window to allow progress.
         if pr.state == ProgressState::Replicate && pr.ins.full() {
             pr.ins.free_first_one();
         }
+
+        // 如果子节点的落后了全部信息，那么直接发送快照
         // Does it request snapshot?
         if pr.matched < self.r.raft_log.last_index() || pr.pending_request_snapshot != INVALID_INDEX
         {
@@ -1657,6 +1765,7 @@ impl<T: Storage> Raft<T> {
             return;
         }
 
+        // ack只读消息队列的消息
         match self.r.read_only.recv_ack(m.from, &m.context) {
             Some(acks) if self.prs.has_quorum(acks) => {}
             _ => return,
@@ -2014,8 +2123,12 @@ impl<T: Storage> Raft<T> {
         }
     }
 
+    // 拉取选票，如果赢了那么直接成为leader
     fn poll(&mut self, from: u64, t: MessageType, vote: bool) -> VoteResult {
+        // 记录了谁投票给当前节点
+        // 节点id，是否投票给了我
         self.prs.record_vote(from, vote);
+        // 统计选票了 res为选举结果。gr为投票给当前节点的票数，rj为拒绝当前节点的票数
         let (gr, rj, res) = self.prs.tally_votes();
         // Unlike etcd, we log when necessary.
         if from != self.id {
@@ -2036,11 +2149,15 @@ impl<T: Storage> Raft<T> {
                 if self.state == StateRole::PreCandidate {
                     self.campaign(CAMPAIGN_ELECTION);
                 } else {
+                    // 成为一个leader
                     self.become_leader();
+                    // 广播消息
                     self.bcast_append();
                 }
             }
             VoteResult::Lost => {
+                // 选举失败，成为follower
+
                 // pb.MsgPreVoteResp contains future term of pre-candidate
                 // m.term > self.term; reuse self.term
                 let term = self.term;
@@ -2553,6 +2670,9 @@ impl<T: Storage> Raft<T> {
 
     // TODO: revoke pub when there is a better way to test.
     /// For a given hardstate, load the state into self.
+    /// 
+    /// 加载hardstate，里面已经包含了 最后一条已经提价的日志id，和任期，和投票的目标
+    /// 这些数据是直接存储在raft log 里面的，顾名思义就是被持久化的，所以在raft启动的时候需要加载的数据
     pub fn load_state(&mut self, hs: &HardState) {
         if hs.commit < self.raft_log.committed || hs.commit > self.raft_log.last_index() {
             fatal!(

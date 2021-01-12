@@ -82,6 +82,7 @@ pub trait Storage {
     /// [first_index()-1, last_index()]. The term of the entry before
     /// first_index is retained for matching purpose even though the
     /// rest of that entry may not be available.
+    /// 给定一个entry的id，返回该entry对应的任期id
     fn term(&self, idx: u64) -> Result<u64>;
 
     /// Returns the index of the first log entry that is possible available via entries, which will
@@ -89,9 +90,11 @@ pub trait Storage {
     ///
     /// New created (but not initialized) `Storage` can be considered as truncated at 0 so that 1
     /// will be returned in this case.
+    /// 第一个entry的id
     fn first_index(&self) -> Result<u64>;
 
     /// The index of the last entry replicated in the `Storage`.
+    /// 最后一个entry的id
     fn last_index(&self) -> Result<u64>;
 
     /// Returns the most recent snapshot.
@@ -100,8 +103,11 @@ pub trait Storage {
     /// so raft state machine could know that Storage needs some time to prepare
     /// snapshot and call snapshot later.
     /// A snapshot's index must not less than the `request_index`.
+    /// 根据所有entry生成快照
     fn snapshot(&self, request_index: u64) -> Result<Snapshot>;
 }
+
+/// 实现的一个内存版的Storage
 
 /// The Memory Storage Core instance holds the actual state of the storage struct. To access this
 /// value, use the `rl` and `wl` functions on the main MemStorage implementation.
@@ -321,6 +327,7 @@ impl MemStorageCore {
 /// in `MemStorage`.
 #[derive(Clone, Default)]
 pub struct MemStorage {
+    /// 使用读写锁封装了以下 MemStorageCore
     core: Arc<RwLock<MemStorageCore>>,
 }
 
@@ -383,9 +390,14 @@ impl Storage for MemStorage {
     }
 
     /// Implements the Storage trait.
+    /// 根据所给的low和high 日志索引获取所有的 日志条目
+    /// [log,high)
+    /// max_size 为最大条目，可选
     fn entries(&self, low: u64, high: u64, max_size: impl Into<Option<u64>>) -> Result<Vec<Entry>> {
         let max_size = max_size.into();
+        // core 的读锁
         let core = self.rl();
+        // 判断所给索引是否越界
         if low < core.first_index() {
             return Err(Error::Store(StorageError::Compacted));
         }
@@ -398,21 +410,27 @@ impl Storage for MemStorage {
             );
         }
 
+        // 获取日志第一个条目对应的索引,即offset
         let offset = core.entries[0].index;
+        // 计算所给low和high在entries数组对应的索引
         let lo = (low - offset) as usize;
         let hi = (high - offset) as usize;
+        // 获取条目和截取最大长度
         let mut ents = core.entries[lo..hi].to_vec();
         limit_size(&mut ents, max_size);
         Ok(ents)
     }
 
-    /// Implements the Storage trait.
+    /// Implements the Storage trait
+    /// 给定一个索引返回这个索引对应条目对应的日期
     fn term(&self, idx: u64) -> Result<u64> {
         let core = self.rl();
+        // 如果索引刚好为快照对应的索引，那么直接在快照元数据中获取任期
         if idx == core.snapshot_metadata.index {
             return Ok(core.snapshot_metadata.term);
         }
 
+        // 下面的逻辑和上面的差不多了，判断索引是否越界和计算对应的数组的索引和获取数据
         if idx < core.first_index() {
             return Err(Error::Store(StorageError::Compacted));
         }
@@ -436,7 +454,9 @@ impl Storage for MemStorage {
     }
 
     /// Implements the Storage trait.
+    /// 实现快照功能
     fn snapshot(&self, request_index: u64) -> Result<Snapshot> {
+        // 这里需要更新快照元数据，所以
         let mut core = self.wl();
         if core.trigger_snap_unavailable {
             core.trigger_snap_unavailable = false;

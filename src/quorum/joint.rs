@@ -53,7 +53,11 @@ impl Configuration {
     /// Takes a mapping of voters to yes/no (true/false) votes and returns a result
     /// indicating whether the vote is pending, lost, or won. A joint quorum requires
     /// both majority quorums to vote in favor.
+    /// 计算选举结果
+    /// 参数为一个 mapping 的映射函数，传入一个节点id 返回是否投票给当前节点 也就是true or false
     pub fn vote_result(&self, check: impl Fn(u64) -> Option<bool>) -> VoteResult {
+        // quorums 机制计算选举情况
+        // 说白了就是 选票 >= (节点个数 / 2) + 1 则获胜
         let i = self.incoming.vote_result(&check);
         let o = self.outgoing.vote_result(check);
         match (i, o) {

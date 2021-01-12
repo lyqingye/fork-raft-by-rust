@@ -116,6 +116,7 @@ impl<T: Storage> RaftLog<T> {
     }
 
     /// For a given index, finds the term associated with it.
+    /// 根据所给索引获取对应的任期
     pub fn term(&self, idx: u64) -> Result<u64> {
         // the valid term range is [index of dummy entry, last index]
         let dummy_idx = self.first_index() - 1;
@@ -176,6 +177,8 @@ impl<T: Storage> RaftLog<T> {
     ///
     /// The first entry MUST have an index equal to the argument 'from'.
     /// The index of the given entries MUST be continuously increasing.
+    /// 
+    /// 给定日志条目，返回有冲突的日志条目的索引
     pub fn find_conflict(&self, ents: &[Entry]) -> u64 {
         for e in ents {
             if !self.match_term(e.index, e.term) {
@@ -195,6 +198,7 @@ impl<T: Storage> RaftLog<T> {
     }
 
     /// Answers the question: Does this index belong to this term?
+    /// 匹配所给索引是否属于所给任期
     pub fn match_term(&self, idx: u64, term: u64) -> bool {
         self.term(idx).map(|t| t == term).unwrap_or(false)
     }
@@ -206,6 +210,8 @@ impl<T: Storage> RaftLog<T> {
     /// # Panics
     ///
     /// Panics if it finds a conflicting index less than committed index.
+    /// 
+    /// 附加条目
     pub fn maybe_append(
         &mut self,
         idx: u64,
@@ -214,9 +220,11 @@ impl<T: Storage> RaftLog<T> {
         ents: &[Entry],
     ) -> Option<(u64, u64)> {
         if self.match_term(idx, term) {
+            // 查找有冲突的条目
             let conflict_idx = self.find_conflict(ents);
             if conflict_idx == 0 {
             } else if conflict_idx <= self.committed {
+                // 冲突条目索引小于已经提交的条目索引，这个是致命的错误
                 fatal!(
                     self.unstable.logger,
                     "entry {} conflict with committed entry {}",
@@ -243,6 +251,7 @@ impl<T: Storage> RaftLog<T> {
     /// # Panics
     ///
     /// Panics if the index goes past the last index.
+    /// 提交条目
     pub fn commit_to(&mut self, to_commit: u64) {
         // never decrease commit
         if self.committed >= to_commit {
@@ -264,6 +273,7 @@ impl<T: Storage> RaftLog<T> {
     /// # Panics
     ///
     /// Panics if the value passed in is not new or known.
+    /// 应用条目
     #[deprecated = "Call raft::commit_apply(idx) instead. Joint Consensus requires an on-apply hook to
     finalize a configuration change. This will become internal API in future versions."]
     pub fn applied_to(&mut self, idx: u64) {
